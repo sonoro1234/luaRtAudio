@@ -1,0 +1,3 @@
+[submodule "rtaudioORIG"]
+	path = rtaudioORIG
+	url = https://github.com/thestk/rtaudio.git
