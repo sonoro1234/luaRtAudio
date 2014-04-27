@@ -3,6 +3,11 @@ extern "C" {
 #include <lauxlib.h>
 #include <lualib.h>
 };
+
+#if defined(USE_SNDFILE)
+#include <set>
+#endif
+
 #include<iostream>
 #define lua_userdata_cast(L, pos, T) reinterpret_cast<T*>(luaL_checkudata((L), (pos), #T))
 void* operator new(size_t size, lua_State* L, const char* metatableName)
@@ -74,13 +79,20 @@ int getCallback(lua_State *L){
     //lua_pushnumber(L,numero);
     return 0;
 }
+typedef struct callback_info
+{
+	unsigned int noutchannels;
+	unsigned int sampleRate;
+} callback_info;
 
 #if defined(USE_SNDFILE)
-	void playSoundFiles(double *outputBuffer,unsigned int nFrames,int channels);
+	bool playSoundFiles(double *outputBuffer,unsigned int nFrames,int channels, double streamTime,double windowsize);
 #endif
 static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, double streamTime, RtAudioStreamStatus status, void *data){
 	//std::cout << *(int *)data << std::endl;
-	int channels = *((int *)data);
+	callback_info *cbinfo = (callback_info *)data;
+	int channels = cbinfo->noutchannels; //*((int *)data);
+	double windowsize = nFrames / cbinfo->sampleRate;
 	memset(outputBuffer,0,nFrames * channels * sizeof(double));
     if (callback_state!=0){
         lua_State *L = callback_state;
@@ -109,7 +121,10 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
         lua_pop(L, 1); /* pop returned value */
     }else{
 	#if defined(USE_SNDFILE)
-		playSoundFiles((double *)outputBuffer,nFrames,channels);
+		if(!playSoundFiles((double *)outputBuffer,nFrames,channels,streamTime,windowsize)){
+			printf("error on playSoundFiles");
+			return 1;
+		}
 	#endif
 		if(callback_state_post!=0){
 			lua_State *L = callback_state_post;
@@ -123,8 +138,8 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 				lua_rawseti(L, -2,i);
 			}
 			if (lua_pcall(L, 2, 1, 0) != 0){
-				printf("error running function %s: %s\n",thecallback_name_post.c_str(),lua_tostring(L, -1));
-				//luaL_error(L, "error running function 'thecallback': %s",lua_tostring(L, -1));
+				//printf("error running function %s: %s\n",thecallback_name_post.c_str(),lua_tostring(L, -1));
+				luaL_error(L, "error running function 'thecallback': %s",lua_tostring(L, -1));
 				lua_pop(L,1);
 				return 1;
 			}
@@ -399,9 +414,9 @@ int openStream_lua(lua_State *L)
     RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
     RtAudio::StreamParameters *output_parameters = getParameters(L, 2);
     RtAudio::StreamParameters *input_parameters = getParameters(L, 3);
-    RtAudioFormat format = luaL_checkint(L, 4);
-    unsigned int samplerate = luaL_checkint(L, 5);
-    unsigned int bufferFrames = luaL_checkint(L, 6);
+    //RtAudioFormat format = luaL_checkint(L, 4);
+    unsigned int samplerate = luaL_checkint(L, 4);
+    unsigned int bufferFrames = luaL_checkint(L, 5);
     //double data[2];
     //data[0]=0;data[1]=0;
     //double *data = (double *) calloc( 2, sizeof( double ) );
@@ -409,11 +424,13 @@ int openStream_lua(lua_State *L)
     options.flags = RTAUDIO_HOG_DEVICE;
     options.flags |= RTAUDIO_SCHEDULE_REALTIME;
     //options.flags |= RTAUDIO_NONINTERLEAVED;
-	int *channels = new int;
-	*channels = output_parameters->nChannels;
+	callback_info* cbinfo = new callback_info;
+	//int *channels = new int;
+	cbinfo->noutchannels = output_parameters->nChannels;
+	cbinfo->sampleRate = samplerate;
 	//std::cout << "nChannels " << *channels << std::endl;
     try {
-        dac->openStream(output_parameters,input_parameters,format,samplerate,&bufferFrames,cbMix,(void *)channels,&options);
+        dac->openStream(output_parameters,input_parameters,RTAUDIO_FLOAT64,samplerate,&bufferFrames,cbMix,(void *)cbinfo,&options);
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -479,13 +496,9 @@ int getStreamTime_lua(lua_State *L)
 
 int getVersion_lua(lua_State *L)
 {
-//#if VERSION
     std::string str = RtAudio::getVersion();
     lua_pushstring(L, str.c_str());
     return 1;
-//#else
-//    return 0;
-//#endif
 }
 
 int getDefaultOutputDevice_lua(lua_State *L)
@@ -582,7 +595,7 @@ int showWarnings_lua(lua_State *L)
 }
 #if defined(USE_SNDFILE)
 #include<sndfile.h>
-#include <set>
+
 /*
 typedef struct soundFileSt
 {
@@ -598,7 +611,11 @@ public:
 	SF_INFO sf_info;
 	std::string filename;
 	double level;
-	soundFileSt():level(1){}
+	double timeoffset;
+	soundFileSt():level(1),timeoffset(0.0){}
+	inline double gettime(){
+		return (double)sf_seek(this->sndfile, 0, SEEK_CUR)/(double)this->sf_info.samplerate;
+	}
 };
 #define LIBSNDFILE "soundFileSt"
 
@@ -682,10 +699,12 @@ int info_sndfile(lua_State *L)
 	
 	return 1;
 }
+ 
+
 int gettime_sndfile(lua_State *L)
 {
 	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
-	double time = (double)sf_seek(sndf->sndfile, 0, SEEK_CUR)/(double)sndf->sf_info.samplerate;
+	double time = sndf->gettime();//(double)sf_seek(sndf->sndfile, 0, SEEK_CUR)/(double)sndf->sf_info.samplerate;
 	lua_pushnumber(L, time);
 	return 1;
 }
@@ -695,6 +714,8 @@ int play_sndfile(lua_State *L)
 	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
 	if (lua_isnumber(L, 2))
 		sndf->level = lua_tonumber(L, 2); 
+	if (lua_isnumber(L, 3))
+		sndf->timeoffset = lua_tonumber(L, 3); 
 	playing_files.insert(sndf);
 	return 0;
 }
@@ -705,20 +726,34 @@ int stop_sndfile(lua_State *L)
 	playing_files.erase(sndf);
 	return 0;
 }
-void playSoundFiles(double *outputBuffer,unsigned int nFrames,int channels)
+
+bool playSoundFiles(double *outputBuffer,unsigned int nFrames,int channels, double streamTime, double windowsize)
 {
 	double BUFFER[nFrames*channels];
 	for (std::set<soundFileSt*>::iterator it=playing_files.begin(); it!=playing_files.end(); ++it){
 		if ((*it)->sf_info.channels == channels){
-			unsigned int read = sf_readf_double((*it)->sndfile,BUFFER,nFrames);
-			//if read < nFrames delete
-			//std::cout << (*it)->filename << std::endl;
-		
-			for(int i=0; i< nFrames*channels; i++){
-				outputBuffer[i] += BUFFER[i]*(*it)->level;
+			if((*it)->timeoffset <= streamTime){ //already set
+				unsigned int read = sf_readf_double((*it)->sndfile,BUFFER,nFrames);
+				//if read < nFrames delete
+				//std::cout << (*it)->filename << std::endl;
+				for(int i=0; i< nFrames*channels; i++){
+					outputBuffer[i] += BUFFER[i]*(*it)->level;
+				}
+			}else{
+				if((*it)->timeoffset < streamTime + windowsize){ //set it if in window
+					int frames = (streamTime + windowsize - (*it)->timeoffset) * (*it)->sf_info.samplerate;
+					int res = sf_seek((*it)->sndfile, 0, SEEK_SET) ;
+					if (res == -1)
+						return false;
+					unsigned int read = sf_readf_double((*it)->sndfile,BUFFER,frames);
+					for(int i = (nFrames - frames)*channels,j=0; i< nFrames*channels; i++,j++){
+						outputBuffer[i] += BUFFER[j]*(*it)->level;
+					}
+				}
 			}
 		}
 	}
+	return true;
 }
 static const struct luaL_Reg funcs_libsndfile[] = {
 	{"stop", stop_sndfile },
@@ -738,6 +773,28 @@ static const NamedConst libsndfile_const[] = {
 };
 #endif
 
+int setStreamTime_lua(lua_State *L)
+{
+    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    double time = (double)luaL_checknumber(L, 2);;
+    try {
+        dac->setStreamTime(time);
+    }catch ( RtAudioError& e ) {
+        return luaL_error(L, e.what());
+    }
+	#if defined(USE_SNDFILE)
+	//set the soundfiles
+	for (std::set<soundFileSt*>::iterator it=playing_files.begin(); it!=playing_files.end(); ++it){
+		if ((*it)->timeoffset <= time){
+			int frames = (time - (*it)->timeoffset) * (*it)->sf_info.samplerate;
+			int res = sf_seek((*it)->sndfile, frames, SEEK_SET) ;
+			if (res == -1) //TODO will happen if seeking after end
+				luaL_error(L,"error in setStreamTime_lua seek");
+		}
+	}
+	#endif
+    return 0;
+}
 static const struct luaL_Reg funcs[] = {
     {"getDeviceCount", getDeviceCount_lua },
     {"getDeviceInfo", getDeviceInfo_lua },
@@ -748,6 +805,7 @@ static const struct luaL_Reg funcs[] = {
 	{"abortStream", abortStream_lua },
 	{"closeStream", closeStream_lua },
     {"getStreamTime", getStreamTime_lua },
+	{"setStreamTime", setStreamTime_lua },
 	{"getDefaultOutputDevice",getDefaultOutputDevice_lua},
 	{"getDefaultInputDevice",getDefaultInputDevice_lua},
 	{"isStreamOpen",isStreamOpen_lua},
