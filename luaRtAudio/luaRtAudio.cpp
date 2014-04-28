@@ -408,7 +408,7 @@ RtAudio::StreamParameters* getParameters(lua_State *L,int n)
     }
     return output_parameters;
 }
-//TODO delete parameters
+
 int openStream_lua(lua_State *L)
 {
     RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
@@ -434,6 +434,8 @@ int openStream_lua(lua_State *L)
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
+	delete output_parameters;
+	delete input_parameters;
     lua_pushnumber(L, bufferFrames);
     return 1;
 }
@@ -726,10 +728,11 @@ int stop_sndfile(lua_State *L)
 	playing_files.erase(sndf);
 	return 0;
 }
-
+//TODO dont read after end of file
 bool playSoundFiles(double *outputBuffer,unsigned int nFrames,int channels, double streamTime, double windowsize)
 {
 	double BUFFER[nFrames*channels];
+	memset(BUFFER,0,nFrames*channels*sizeof(double));
 	for (std::set<soundFileSt*>::iterator it=playing_files.begin(); it!=playing_files.end(); ++it){
 		if ((*it)->sf_info.channels == channels){
 			if((*it)->timeoffset <= streamTime){ //already set
@@ -788,8 +791,8 @@ int setStreamTime_lua(lua_State *L)
 		if ((*it)->timeoffset <= time){
 			int frames = (time - (*it)->timeoffset) * (*it)->sf_info.samplerate;
 			int res = sf_seek((*it)->sndfile, frames, SEEK_SET) ;
-			if (res == -1) //TODO will happen if seeking after end
-				luaL_error(L,"error in setStreamTime_lua seek");
+			//if (res == -1) //TODO will happen if seeking after end
+			//	luaL_error(L,"error in setStreamTime_lua seek: %s",sf_strerror((*it)->sndfile));
 		}
 	}
 	#endif
