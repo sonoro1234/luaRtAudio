@@ -28,14 +28,14 @@ static lua_State *callback_state_post=0;
 static std::string thecallback_name_post;
 
 int setCallbackLanes(lua_State *L){
-	//lua_gc(L, LUA_GCSTOP,0);
+	lua_gc(L, LUA_GCSTOP,0);
 	const char* str = luaL_checkstring(L, 1);
 	thecallback_name = str;
 	callback_state = L;
 	return 0;
 }
 int setCallbackLanesPost(lua_State *L){
-	//lua_gc(L, LUA_GCSTOP,0);
+	lua_gc(L, LUA_GCSTOP,0);
 	const char* str = luaL_checkstring(L, 1);
 	thecallback_name_post = str;
 	callback_state_post = L;
