@@ -28,14 +28,14 @@ static lua_State *callback_state_post=0;
 static std::string thecallback_name_post;
 
 int setCallbackLanes(lua_State *L){
-	lua_gc(L, LUA_GCSTOP,0);
+	//lua_gc(L, LUA_GCSTOP,0);
 	const char* str = luaL_checkstring(L, 1);
 	thecallback_name = str;
 	callback_state = L;
 	return 0;
 }
 int setCallbackLanesPost(lua_State *L){
-	lua_gc(L, LUA_GCSTOP,0);
+	//lua_gc(L, LUA_GCSTOP,0);
 	const char* str = luaL_checkstring(L, 1);
 	thecallback_name_post = str;
 	callback_state_post = L;
@@ -51,8 +51,10 @@ int setCallback(lua_State *L){
     if (luaL_loadstring(L1, chunk) != 0)
         luaL_error(L, "error starting thread: %s",lua_tostring(L1, -1));
     luaL_openlibs(L1); /* open standard libraries */
-    if (lua_pcall(L1, 0, 0, 0) != 0) /* call main chunk */
+    if (lua_pcall(L1, 0, 0, 0) != 0){ /* call main chunk */
         fprintf(stderr, "thread error: %s", lua_tostring(L1, -1));
+		return 0;
+	}
     //lua_gc(L1, LUA_GCSTOP,0);
     callback_state = L1;
     return 0;
@@ -68,8 +70,10 @@ int setCallbackPost(lua_State *L){
     if (luaL_loadstring(L1, chunk) != 0)
         luaL_error(L, "error starting thread: %s",lua_tostring(L1, -1));
     luaL_openlibs(L1); /* open standard libraries */
-    if (lua_pcall(L1, 0, 0, 0) != 0) /* call main chunk */
+    if (lua_pcall(L1, 0, 0, 0) != 0) {/* call main chunk */
         fprintf(stderr, "thread error: %s", lua_tostring(L1, -1));
+		return 0;
+	}
     //lua_gc(L1, LUA_GCSTOP,0);
     callback_state_post = L1;
     return 0;
@@ -834,7 +838,7 @@ static const struct luaL_Reg thislib[] = {
     {NULL, NULL}
 };
 
-extern "C" LUALIB_API int luaopen_RtAudio (lua_State* L) {
+extern "C" LUALIB_API int luaopen_RtAudio_core (lua_State* L) {
 
 #if defined(USE_SNDFILE)
 	luaL_newmetatable(L, LIBSNDFILE);
