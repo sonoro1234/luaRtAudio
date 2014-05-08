@@ -4,11 +4,10 @@ extern "C" {
 #include <lualib.h>
 };
 
-#if defined(USE_SNDFILE)
-#include <set>
-#endif
+
 
 #include<iostream>
+#include<cstring>
 #define lua_userdata_cast(L, pos, T) reinterpret_cast<T*>(luaL_checkudata((L), (pos), #T))
 void* operator new(size_t size, lua_State* L, const char* metatableName)
 {
@@ -19,120 +18,339 @@ void* operator new(size_t size, lua_State* L, const char* metatableName)
     return ptr;
 }
 #define lua_pushobject(L, T) new(L, #T) T
+////////////////////////////
+#if defined(USE_SNDFILE)
+#include<sndfile.h>
+struct DAC;
+class soundFileSt{
+public:
+	SNDFILE *sndfile=NULL;
+	SF_INFO sf_info;
+	std::string filename;
+	double level;
+	double timeoffset;
+	DAC * dac;
+	soundFileSt():level(1),timeoffset(0.0),dac(NULL){}
+	inline double gettime(){
+		return (double)sf_seek(this->sndfile, 0, SEEK_CUR)/(double)this->sf_info.samplerate;
+	}
+};
+#define LIBSNDFILE "soundFileSt"
+#endif //USE_SNDFILE
+
 #include "RtAudio.h"
 #define RTAUDIO "RtAudio"
 
-static lua_State *callback_state=0;
-static std::string thecallback_name;
-static lua_State *callback_state_post=0;
-static std::string thecallback_name_post;
+#if defined(USE_SNDFILE)
+#include <set>
+#endif
 
-int setCallbackLanes(lua_State *L){
-	//lua_gc(L, LUA_GCSTOP,0);
-	const char* str = luaL_checkstring(L, 1);
-	thecallback_name = str;
-	callback_state = L;
-	return 0;
-}
-int setCallbackLanesPost(lua_State *L){
-	//lua_gc(L, LUA_GCSTOP,0);
-	const char* str = luaL_checkstring(L, 1);
-	thecallback_name_post = str;
-	callback_state_post = L;
-	return 0;
-}
-int setCallback(lua_State *L){
-    const char *chunk = luaL_checkstring(L, 1);
-	const char* str = luaL_checkstring(L, 2);
-	thecallback_name = str;
-    lua_State *L1 = luaL_newstate();
-    if (L1 == NULL)
-        luaL_error(L, "unable to create new state");
-    if (luaL_loadstring(L1, chunk) != 0)
-        luaL_error(L, "error starting thread: %s",lua_tostring(L1, -1));
-    luaL_openlibs(L1); /* open standard libraries */
-    if (lua_pcall(L1, 0, 0, 0) != 0){ /* call main chunk */
-        fprintf(stderr, "thread error: %s", lua_tostring(L1, -1));
-		return 0;
-	}
-    //lua_gc(L1, LUA_GCSTOP,0);
-    callback_state = L1;
-    return 0;
-}
-
-int setCallbackPost(lua_State *L){
-    const char *chunk = luaL_checkstring(L, 1);
-	const char* str = luaL_checkstring(L, 2);
-	thecallback_name_post = str;
-    lua_State *L1 = luaL_newstate();
-    if (L1 == NULL)
-        luaL_error(L, "unable to create new state");
-    if (luaL_loadstring(L1, chunk) != 0)
-        luaL_error(L, "error starting thread: %s",lua_tostring(L1, -1));
-    luaL_openlibs(L1); /* open standard libraries */
-    if (lua_pcall(L1, 0, 0, 0) != 0) {/* call main chunk */
-        fprintf(stderr, "thread error: %s", lua_tostring(L1, -1));
-		return 0;
-	}
-    //lua_gc(L1, LUA_GCSTOP,0);
-    callback_state_post = L1;
-    return 0;
-}
-
-int getCallback(lua_State *L){
-    //lua_pushnumber(L,numero);
-    return 0;
-}
-typedef struct callback_info
+struct DAC
 {
-	unsigned int noutchannels;
+	RtAudio * rtaudio;
+	RtAudio::StreamParameters* outparams;
+	RtAudio::StreamParameters* inparams;
 	unsigned int sampleRate;
-} callback_info;
-
+	lua_State *callback_state;
+	int thecallback_ref;
+	lua_State *callback_state_post;
+	int thecallback_post_ref;
+#if defined(USE_SNDFILE)
+	std::set<soundFileSt *> playing_files;
+	SNDFILE *recordfile;
+#endif
+	//DAC(RtAudio::Api api=UNSPECIFIED):rtaudio(api),callback_state(NULL),thecallback_ref(0),callback_state_post(NULL),thecallback_post_ref(0){};
+	DAC(RtAudio::Api api):callback_state(NULL),thecallback_ref(0),callback_state_post(NULL),thecallback_post_ref(0),sampleRate(0)
+	{
+		outparams = NULL;
+		inparams = NULL;
+		recordfile = NULL;
+		rtaudio = new RtAudio(api);
+	};
+	~DAC(){
+		if(this->rtaudio->isStreamOpen())
+			this->rtaudio->closeStream();
+		if(this->outparams)
+			delete this->outparams;
+		if(this->inparams)
+			delete this->inparams;
+		#if defined(USE_SNDFILE)
+			if(this->recordfile){
+				sf_write_sync(this->recordfile);
+				sf_close(this->recordfile);
+			}
+		#endif
+		this->rtaudio->~RtAudio();
+	}
 #if defined(USE_SNDFILE)
 	bool playSoundFiles(double *outputBuffer,unsigned int nFrames,int channels, double streamTime,double windowsize);
 #endif
+};
+
+typedef struct NamedConst  
+{
+  const char *str;
+  unsigned int value;
+} NamedConst;
+
+#if defined(USE_SNDFILE)
+int soundFile(lua_State *L)
+{
+	std::string str = luaL_checkstring(L, 1);
+	//soundFileSt *sndf = (soundFileSt *)lua_newuserdata(L, sizeof(soundFileSt));
+	//sndf = new(sndf) soundFileSt();
+	//luaL_getmetatable(L, LIBSNDFILE);
+    //lua_setmetatable(L, -2);
+	soundFileSt *sndf = (soundFileSt *)lua_pushobject(L, soundFileSt)();
+	sndf->filename = str;
+	sndf->sf_info.format = 0;
+	//std::cout << "trying to open " << str << std::endl;
+	sndf->sndfile = sf_open(str.c_str(),SFM_READ,&(sndf->sf_info));
+	if (sndf->sndfile == NULL){
+		luaL_error(L, "Error opening %s :%s",str.c_str(),sf_strerror(NULL));
+	}
+	return 1;
+}
+
+int seek_sndfile(lua_State *L)
+{
+	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
+	int offset = luaL_checkinteger(L, 2);
+	int type_seek;
+	if (lua_gettop(L)==2){
+		type_seek = SEEK_SET;
+	}else{
+		type_seek = luaL_checkinteger(L, 3);
+	}
+	int res = sf_seek(sndf->sndfile, offset, type_seek) ;
+	if (res == -1)
+		luaL_error(L,"error in seek");
+	lua_pushinteger(L, res);
+	return 1;
+}
+
+int close_sndfile(lua_State *L)
+{
+	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
+		//std::cout << "closing file " << sndf->filename << std::endl;
+	if(sndf->dac)
+		sndf->dac->playing_files.erase(sndf);
+	int err = sf_close(sndf->sndfile);
+	if(err!=0)
+		luaL_error(L, "error closing file %s : %s",sndf->filename.c_str(),sf_error_number(err));
+	return 0;
+}
+
+int destroy_sndfile(lua_State *L)
+{
+	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
+	if(sndf->dac)
+		sndf->dac->playing_files.erase(sndf);
+	int err = sf_close(sndf->sndfile);
+	if(err!=0)
+		luaL_error(L, "error closing file %s : %s",sndf->filename.c_str(),sf_error_number(err));
+	sndf->~soundFileSt();
+	return 0;
+}
+
+int info_sndfile(lua_State *L)
+{
+	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
+	lua_newtable(L);
+	lua_pushstring(L, "frames");
+    lua_pushinteger(L, sndf->sf_info.frames);
+    lua_settable(L,-3);
+	lua_pushstring(L, "samplerate");
+    lua_pushinteger(L, sndf->sf_info.samplerate);
+    lua_settable(L,-3);
+	lua_pushstring(L, "channels");
+    lua_pushinteger(L, sndf->sf_info.channels);
+    lua_settable(L,-3);
+	lua_pushstring(L, "format");
+    lua_pushinteger(L, sndf->sf_info.format);
+    lua_settable(L,-3);
+	
+	return 1;
+}
+ 
+
+int gettime_sndfile(lua_State *L)
+{
+	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
+	double time = sndf->gettime();//(double)sf_seek(sndf->sndfile, 0, SEEK_CUR)/(double)sndf->sf_info.samplerate;
+	lua_pushnumber(L, time);
+	return 1;
+}
+
+int play_sndfile(lua_State *L)
+{
+	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
+	DAC *dac = lua_userdata_cast(L,2,DAC);
+	bool open;
+    try {
+        open = dac->rtaudio->isStreamOpen();
+    }catch ( RtAudioError& e ) {
+        return luaL_error(L, e.what());
+    }
+	if(!open || dac->outparams == NULL){
+		luaL_error(L, "this dac is not opened for play\n");
+		return 0;
+	}
+	if(sndf->sf_info.channels != dac->outparams->nChannels){
+		luaL_error(L, "number of dac channels:%d and sndfile channels:%d dont match\n",dac->outparams->nChannels,sndf->sf_info.channels);
+		return 0;
+	}
+	
+	if(sndf->dac != NULL && sndf->dac != dac){
+		luaL_error(L, "this sndfile is already opened in another dac\n");
+		return 0;
+	}else{
+		sndf->dac = dac;
+	}
+	if (lua_isnumber(L, 3))
+		sndf->level = lua_tonumber(L, 3); 
+	if (lua_isnumber(L, 4))
+		sndf->timeoffset = lua_tonumber(L, 4); 
+	sndf->dac->playing_files.insert(sndf);
+	return 0;
+}
+
+
+int record(lua_State *L){
+	DAC *dac = lua_userdata_cast(L,1,DAC);
+    std::string str = luaL_checkstring(L, 2);
+	
+	bool open;
+    try {
+        open = dac->rtaudio->isStreamOpen();
+    }catch ( RtAudioError& e ) {
+        return luaL_error(L, e.what());
+    }
+	if(!open || dac->outparams == NULL){
+		luaL_error(L, "this dac is not opened.\n");
+		return 0;
+	}
+	
+	SF_INFO sfinfo;
+	sfinfo.samplerate = dac->sampleRate;
+	sfinfo.channels = dac->outparams? dac->outparams->nChannels : dac->inparams->nChannels;
+	sfinfo.format = SF_FORMAT_WAV | SF_FORMAT_DOUBLE;
+	dac->recordfile = sf_open(str.c_str(),SFM_WRITE,&sfinfo);
+	if (dac->recordfile == NULL){
+		luaL_error(L, "Error opening %s :%s",str.c_str(),sf_strerror(NULL));
+	}
+    return 0;
+}
+
+int stop_sndfile(lua_State *L)
+{
+	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
+	if(sndf->dac)
+		sndf->dac->playing_files.erase(sndf);
+	return 0;
+}
+//TODO dont read after end of file
+bool DAC::playSoundFiles(double *outputBuffer,unsigned int nFrames,int channels, double streamTime, double windowsize)
+{
+	double BUFFER[nFrames*channels];
+	memset(BUFFER,0,nFrames*channels*sizeof(double));
+	for (std::set<soundFileSt*>::iterator it=this->playing_files.begin(); it!=this->playing_files.end(); ++it){
+		if ((*it)->sf_info.channels == channels){ //it was already checked in sndfile:play but...
+			if((*it)->timeoffset <= streamTime){ //already set
+				unsigned int read = sf_readf_double((*it)->sndfile,BUFFER,nFrames);
+				//if read < nFrames delete
+				//std::cout << (*it)->filename << std::endl;
+				for(int i=0; i< nFrames*channels; i++){
+					outputBuffer[i] += BUFFER[i]*(*it)->level;
+				}
+			}else{
+				if((*it)->timeoffset < streamTime + windowsize){ //set it if in window
+					int frames = (streamTime + windowsize - (*it)->timeoffset) * (*it)->sf_info.samplerate;
+					int res = sf_seek((*it)->sndfile, 0, SEEK_SET) ;
+					if (res == -1)
+						return false;
+					unsigned int read = sf_readf_double((*it)->sndfile,BUFFER,frames);
+					for(int i = (nFrames - frames)*channels,j=0; i< nFrames*channels; i++,j++){
+						outputBuffer[i] += BUFFER[j]*(*it)->level;
+					}
+				}
+			}
+		}
+	}
+	return true;
+}
+static const struct luaL_Reg funcs_libsndfile[] = {
+	{"stop", stop_sndfile },
+	{"play", play_sndfile },
+	{"close", close_sndfile },
+	{"info", info_sndfile },
+	{"seek", seek_sndfile},
+	{"gettime", gettime_sndfile},
+	{"__gc", destroy_sndfile },
+    {NULL, NULL}
+};
+static const NamedConst libsndfile_const[] = {
+    {"SEEK_SET",             SEEK_SET},
+    {"SEEK_CUR",             SEEK_CUR}, 
+    {"SEEK_END",             SEEK_END}, 
+    { 0, 0}
+};
+#endif //USE_SNDFILE
+
+
+
+
+
 static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, double streamTime, RtAudioStreamStatus status, void *data){
-	//std::cout << *(int *)data << std::endl;
-	callback_info *cbinfo = (callback_info *)data;
-	int channels = cbinfo->noutchannels; //*((int *)data);
-	double windowsize = nFrames / cbinfo->sampleRate;
+
+	if(status)
+		printf("RtAudio callback status %d\n",status);
+		
+	DAC *dac = (DAC *)data;
+	
+	if(inputBuffer && outputBuffer){ //duplex , must have the same channels
+		memcpy( outputBuffer, inputBuffer, nFrames * dac->outparams->nChannels * sizeof(double) );
+	}
+	
+	
+	int channels = dac->outparams->nChannels; //*((int *)data);
+	double windowsize = nFrames / dac->sampleRate;
 	memset(outputBuffer,0,nFrames * channels * sizeof(double));
-    if (callback_state!=0){
-        lua_State *L = callback_state;
-        //lua_gc(L, LUA_GCSTOP,0);
-        lua_getglobal(L, thecallback_name.c_str()); /* function to be called */
-        lua_pushnumber(L, nFrames); /* push 1st argument */
-        if (lua_pcall(L, 1, 1, 0) != 0){
-            printf("error running function %s: %s\n",thecallback_name.c_str(),lua_tostring(L, -1));
-            //luaL_error(L, "error running function 'thecallback': %s",lua_tostring(L, -1));
-			lua_pop(L,1);
-			return 1;
+	
+	if(outputBuffer){
+		if (dac->callback_state!=0){
+			lua_State *L = dac->callback_state;
+			lua_rawgeti(L, LUA_REGISTRYINDEX, dac->thecallback_ref);
+			lua_pushnumber(L, nFrames); /* push 1st argument */
+			if (lua_pcall(L, 1, 1, 0) != 0){
+				//printf("Error running callback function : %s\n",lua_tostring(L, -1));
+				luaL_error(L, "error running callback function: %s",lua_tostring(L, -1));
+				lua_pop(L,1);
+				return 1;
+			}
+			if(!lua_istable(L,-1)){
+				printf("error running callback function: did not returned table\n");
+				//luaL_error(L, "error running function 'thecallback': did not returned table");
+				return 1;
+			}
+			double *buffer = (double *) outputBuffer;
+			//interleaved is more simple
+			for (int i=1; i<=nFrames*channels; i++ ) {
+				lua_rawgeti(L, -1,i);
+				*buffer++ = (double)luaL_checknumber(L, -1);
+				lua_pop(L, 1);
+			}
+			lua_pop(L, 1); /* pop returned value */
 		}
-        if(!lua_istable(L,-1)){
-            printf("error running function %s: did not returned table\n",thecallback_name.c_str());
-            //luaL_error(L, "error running function 'thecallback': did not returned table");
-			return 1;
-		}
-        double dummy;
-        double *buffer = (double *) outputBuffer;
-		//interleaved is more simple
-		for (int i=1; i<=nFrames*channels; i++ ) {
-			lua_rawgeti(L, -1,i);
-            *buffer++ = (double)luaL_checknumber(L, -1);
-            lua_pop(L, 1);
-		}
-        lua_pop(L, 1); /* pop returned value */
-    }else{
-	#if defined(USE_SNDFILE)
-		if(!playSoundFiles((double *)outputBuffer,nFrames,channels,streamTime,windowsize)){
+#if defined(USE_SNDFILE)
+		if(!dac->playSoundFiles((double *)outputBuffer,nFrames,channels,streamTime,windowsize)){
 			printf("error on playSoundFiles");
 			return 1;
 		}
-	#endif
-		if(callback_state_post!=0){
-			lua_State *L = callback_state_post;
-			lua_getglobal(L, thecallback_name_post.c_str());
+#endif
+		if(dac->callback_state_post!=0){
+			lua_State *L = dac->callback_state_post;
+			lua_rawgeti(L, LUA_REGISTRYINDEX, dac->thecallback_post_ref);
 			lua_pushnumber(L, nFrames);
 			//table with data
 			double *buffer = (double *) outputBuffer;
@@ -143,7 +361,7 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 			}
 			if (lua_pcall(L, 2, 1, 0) != 0){
 				//printf("error running function %s: %s\n",thecallback_name_post.c_str(),lua_tostring(L, -1));
-				luaL_error(L, "error running function 'thecallback': %s",lua_tostring(L, -1));
+				luaL_error(L, "error running callback post function : %s",lua_tostring(L, -1));
 				lua_pop(L,1);
 				return 1;
 			}
@@ -164,74 +382,14 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 				lua_pop(L, 1); /* pop returned value */
 			}
 		}
+		if(dac->recordfile){
+			sf_writef_double(dac->recordfile, (double *)outputBuffer, nFrames);
+		}
 	}
     return 0;
 }
 
-// Two-channel sawtooth wave generator.
-int saw( void *outputBuffer, void *inputBuffer, unsigned int nBufferFrames,
-double streamTime, RtAudioStreamStatus status, void *userData )
-{
-    unsigned int i, j;
-    double *buffer = (double *) outputBuffer;
-    double *lastValues = (double *) userData;
-    if ( status )
-        std::cout << "Stream underflow detected!" << std::endl;
-        // Write interleaved audio data.
-    for ( i=0; i<nBufferFrames; i++ ) {
-        for ( j=0; j<2; j++ ) {
-            *buffer++ = lastValues[j];
-            lastValues[j] += 0.005 * (j+1+(j*0.1));
-            if ( lastValues[j] >= 1.0 ) lastValues[j] -= 2.0;
-        }
-    }
-    return 0;
-}
 
-int saw32( void *outputBuffer, void *inputBuffer, unsigned int nBufferFrames,
-double streamTime, RtAudioStreamStatus status, void *userData )
-{
-    unsigned int i, j;
-    long *buffer = (long *) outputBuffer;
-    double *lastValues = (double *) userData;
-    if ( status )
-        std::cout << "Stream underflow detected!" << std::endl;
-        // Write interleaved audio data.
-    for ( i=0; i<nBufferFrames; i++ ) {
-        for ( j=0; j<2; j++ ) {
-            *buffer++ = lastValues[j]*LONG_MAX;
-            lastValues[j] += 0.005 ;//* (j+1+(j*0.1));
-            if ( lastValues[j] >= 1.0 ) lastValues[j] -= 2.0;
-        }
-    }
-    return 0;
-}
-
-int saw16( void *outputBuffer, void *inputBuffer, unsigned int nBufferFrames,
-double streamTime, RtAudioStreamStatus status, void *userData )
-{
-    int i, j;
-    signed short *buffer = (signed short *) outputBuffer;
-    double *lastValues = (double *) userData;
-    if ( status )
-        std::cout << "Stream underflow detected!" << std::endl;
-        // Write interleaved audio data.
-    for ( i=0; i<nBufferFrames; i++ ) {
-        //for ( j=0; j<2; j++ ) {
-        for ( j=1; j>=0; j-- ) {
-            *buffer++ = (signed short)(lastValues[j]*32767*0.1);
-            lastValues[j] += 0.005 ;//* (j+1+(j*0.1));
-            if ( lastValues[j] >= 1.0 ) lastValues[j] -= 2.0;
-        }
-    }
-    return 0;
-}
-
-typedef struct NamedConst  
-{
-  const char *str;
-  unsigned int value;
-} NamedConst;
 
 static const NamedConst rtaudio_Const[] = {
     {"RtAudio_UNSPECIFIED",             RtAudio::UNSPECIFIED},
@@ -277,31 +435,31 @@ const char * getStringConstants(unsigned int val){
 int lua_RtAudio(lua_State *L)
 {
     if (lua_gettop(L)== 0)
-        lua_pushobject(L, RtAudio)();
+        lua_pushobject(L, DAC)(RtAudio::UNSPECIFIED);
     else
-        lua_pushobject(L, RtAudio)((RtAudio::Api)lua_tointeger(L,1));
+        lua_pushobject(L, DAC)((RtAudio::Api)lua_tointeger(L,1));
     return 1;
 }
 int Destroy(lua_State *L)
 {
-	RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
-	dac->~RtAudio();
+	DAC *dac = lua_userdata_cast(L,1,DAC);
+	dac->~DAC();
 	return 0;
 }
 int getDeviceCount_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
-    lua_pushinteger(L, dac->getDeviceCount());
+    DAC *dac = lua_userdata_cast(L,1,DAC);
+    lua_pushinteger(L, dac->rtaudio->getDeviceCount());
     return 1;
 }
 
 int getDeviceInfo_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
     int ndevice = luaL_checkint(L, 2);
     RtAudio::DeviceInfo info;
     try {
-        info = dac->getDeviceInfo(ndevice);
+        info = dac->rtaudio->getDeviceInfo(ndevice);
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -367,10 +525,10 @@ int getCompiledApi_lua(lua_State *L)
 
 int getCurrentApi_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
     RtAudio::Api api;
     try {
-        api = dac->getCurrentApi();
+        api = dac->rtaudio->getCurrentApi();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -385,9 +543,9 @@ int getCurrentApi_lua(lua_State *L)
 RtAudio::StreamParameters* getParameters(lua_State *L,int n)
 {
     RtAudio::StreamParameters *output_parameters;
-    RtAudio::StreamParameters *output = new RtAudio::StreamParameters;
+    
     if (lua_istable(L, n)){
-        //std::cout  << "istable" << std::endl; 
+        RtAudio::StreamParameters *output = new RtAudio::StreamParameters;
         lua_rawgeti(L, n, 1);
         output->deviceId = luaL_checkint(L, -1);
         //std::cout << output->deviceId << "is outputlll" << std::endl; 
@@ -415,39 +573,43 @@ RtAudio::StreamParameters* getParameters(lua_State *L,int n)
 
 int openStream_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
-    RtAudio::StreamParameters *output_parameters = getParameters(L, 2);
-    RtAudio::StreamParameters *input_parameters = getParameters(L, 3);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
+    dac->outparams = getParameters(L, 2);
+    dac->inparams = getParameters(L, 3);
     //RtAudioFormat format = luaL_checkint(L, 4);
-    unsigned int samplerate = luaL_checkint(L, 4);
+    dac->sampleRate = luaL_checkint(L, 4);
     unsigned int bufferFrames = luaL_checkint(L, 5);
-    //double data[2];
-    //data[0]=0;data[1]=0;
-    //double *data = (double *) calloc( 2, sizeof( double ) );
     RtAudio::StreamOptions options;
     options.flags = RTAUDIO_HOG_DEVICE;
     options.flags |= RTAUDIO_SCHEDULE_REALTIME;
     //options.flags |= RTAUDIO_NONINTERLEAVED;
-	callback_info* cbinfo = new callback_info;
-	//int *channels = new int;
-	cbinfo->noutchannels = output_parameters->nChannels;
-	cbinfo->sampleRate = samplerate;
-	//std::cout << "nChannels " << *channels << std::endl;
+	
+	if(!dac->outparams && !dac->inparams){
+		luaL_error(L, "openStream has nil output and input\n");
+		return 0;
+	}
+	
+	//check channels match in duplex mode
+	if(dac->outparams && dac->inparams)
+		if(dac->outparams->nChannels != dac->inparams->nChannels){
+			luaL_error(L, "out channels %d and input channels %d dont match\n",dac->outparams->nChannels, dac->inparams->nChannels);
+			return 0;
+		}
+
     try {
-        dac->openStream(output_parameters,input_parameters,RTAUDIO_FLOAT64,samplerate,&bufferFrames,cbMix,(void *)cbinfo,&options);
+        dac->rtaudio->openStream(dac->outparams,dac->inparams,RTAUDIO_FLOAT64,dac->sampleRate,&bufferFrames,cbMix,(void *)dac,&options);
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
-	delete output_parameters;
-	delete input_parameters;
+
     lua_pushnumber(L, bufferFrames);
     return 1;
 }
 int startStream_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
     try {
-        dac->startStream();
+        dac->rtaudio->startStream();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -456,9 +618,9 @@ int startStream_lua(lua_State *L)
 
 int stopStream_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
     try {
-        dac->stopStream();
+        dac->rtaudio->stopStream();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -467,9 +629,9 @@ int stopStream_lua(lua_State *L)
 
 int abortStream_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
     try {
-        dac->abortStream();
+        dac->rtaudio->abortStream();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -478,21 +640,37 @@ int abortStream_lua(lua_State *L)
 
 int closeStream_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
     try {
-        dac->closeStream();
+        dac->rtaudio->closeStream();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
+	delete dac->outparams;
+	delete dac->inparams;
+	dac->outparams = NULL;
+	dac->inparams = NULL;
+	
+	#if defined(USE_SNDFILE)
+	if(dac->recordfile){
+		sf_write_sync(dac->recordfile);
+		sf_close(dac->recordfile);
+		dac->recordfile = NULL;
+	}
+	//set the soundfiles
+	for (std::set<soundFileSt*>::iterator it=dac->playing_files.begin(); it!=dac->playing_files.end(); ++it){
+		dac->playing_files.erase(*it);
+	}
+	#endif
     return 0;
 }
 
 int getStreamTime_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
     double time;
     try {
-        time = dac->getStreamTime();
+        time = dac->rtaudio->getStreamTime();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -509,10 +687,10 @@ int getVersion_lua(lua_State *L)
 
 int getDefaultOutputDevice_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
 	unsigned int id;
     try {
-        id = dac->getDefaultOutputDevice();
+        id = dac->rtaudio->getDefaultOutputDevice();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -522,10 +700,10 @@ int getDefaultOutputDevice_lua(lua_State *L)
 
 int getDefaultInputDevice_lua(lua_State *L)
 {
-	RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+	DAC *dac = lua_userdata_cast(L,1,DAC);
     unsigned int id;
     try {
-        id = dac->getDefaultInputDevice();
+        id = dac->rtaudio->getDefaultInputDevice();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -535,10 +713,10 @@ int getDefaultInputDevice_lua(lua_State *L)
 
 int isStreamOpen_lua(lua_State *L)
 {
-	RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+	DAC *dac = lua_userdata_cast(L,1,DAC);
     bool open;
     try {
-        open = dac->isStreamOpen();
+        open = dac->rtaudio->isStreamOpen();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -548,10 +726,10 @@ int isStreamOpen_lua(lua_State *L)
 
 int isStreamRunning_lua(lua_State *L)
 {
-	RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+	DAC *dac = lua_userdata_cast(L,1,DAC);
     bool open;
     try {
-        open = dac->isStreamRunning();
+        open = dac->rtaudio->isStreamRunning();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -561,10 +739,10 @@ int isStreamRunning_lua(lua_State *L)
 
 int getStreamLatency_lua(lua_State *L)
 {
-	RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+	DAC *dac = lua_userdata_cast(L,1,DAC);
     long latency;
     try {
-        latency = dac->getStreamLatency();
+        latency = dac->rtaudio->getStreamLatency();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -575,10 +753,10 @@ int getStreamLatency_lua(lua_State *L)
 
 int getStreamSampleRate_lua(lua_State *L)
 {
-	RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+	DAC *dac = lua_userdata_cast(L,1,DAC);
     unsigned int sr;
     try {
-        sr = dac->getStreamSampleRate();
+        sr = dac->rtaudio->getStreamSampleRate();
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
@@ -588,210 +766,31 @@ int getStreamSampleRate_lua(lua_State *L)
 
 int showWarnings_lua(lua_State *L)
 {
-	RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+	DAC *dac = lua_userdata_cast(L,1,DAC);
 	if(!lua_isboolean(L, 2))
 		luaL_error(L, "arg should be a boolean\n");
 	bool show = lua_toboolean(L, 2);
     try {
-        dac->showWarnings(show);
+        dac->rtaudio->showWarnings(show);
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
     return 0;
 }
-#if defined(USE_SNDFILE)
-#include<sndfile.h>
 
-/*
-typedef struct soundFileSt
-{
-	SNDFILE *sndfile=NULL;
-	SF_INFO sf_info;
-	std::string filename;
-	double level;
-}soundFileSt;
-*/
-class soundFileSt{
-public:
-	SNDFILE *sndfile=NULL;
-	SF_INFO sf_info;
-	std::string filename;
-	double level;
-	double timeoffset;
-	soundFileSt():level(1),timeoffset(0.0){}
-	inline double gettime(){
-		return (double)sf_seek(this->sndfile, 0, SEEK_CUR)/(double)this->sf_info.samplerate;
-	}
-};
-#define LIBSNDFILE "soundFileSt"
-
-static std::set<soundFileSt *> playing_files;
-
-int soundFile(lua_State *L)
-{
-	std::string str = luaL_checkstring(L, 1);
-	//soundFileSt *sndf = (soundFileSt *)lua_newuserdata(L, sizeof(soundFileSt));
-	//sndf = new(sndf) soundFileSt();
-	//luaL_getmetatable(L, LIBSNDFILE);
-    //lua_setmetatable(L, -2);
-	soundFileSt *sndf = (soundFileSt *)lua_pushobject(L, soundFileSt)();
-	
-	sndf->filename = str;
-	sndf->sf_info.format = 0;
-	//std::cout << "trying to open " << str << std::endl;
-	sndf->sndfile = sf_open(str.c_str(),SFM_READ,&(sndf->sf_info));
-	if (sndf->sndfile == NULL){
-		luaL_error(L, "Error opening %s :%s",str.c_str(),sf_strerror(NULL));
-	}
-	return 1;
-}
-
-int seek_sndfile(lua_State *L)
-{
-	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
-	int offset = luaL_checkinteger(L, 2);
-	int type_seek;
-	if (lua_gettop(L)==2){
-		type_seek = SEEK_SET;
-	}else{
-		type_seek = luaL_checkinteger(L, 3);
-	}
-	int res = sf_seek(sndf->sndfile, offset, type_seek) ;
-	if (res == -1)
-		luaL_error(L,"error in seek");
-	lua_pushinteger(L, res);
-	return 1;
-}
-
-int close_sndfile(lua_State *L)
-{
-
-	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
-		//std::cout << "closing file " << sndf->filename << std::endl;
-	playing_files.erase(sndf);
-	int err = sf_close(sndf->sndfile);
-	if(err!=0)
-		luaL_error(L, "error closing file %s : %s",sndf->filename.c_str(),sf_error_number(err));
-	return 0;
-}
-
-int destroy_sndfile(lua_State *L)
-{
-	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
-	playing_files.erase(sndf);
-	int err = sf_close(sndf->sndfile);
-	if(err!=0)
-		luaL_error(L, "error closing file %s : %s",sndf->filename.c_str(),sf_error_number(err));
-	sndf->~soundFileSt();
-	return 0;
-}
-
-int info_sndfile(lua_State *L)
-{
-	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
-	lua_newtable(L);
-	lua_pushstring(L, "frames");
-    lua_pushinteger(L, sndf->sf_info.frames);
-    lua_settable(L,-3);
-	lua_pushstring(L, "samplerate");
-    lua_pushinteger(L, sndf->sf_info.samplerate);
-    lua_settable(L,-3);
-	lua_pushstring(L, "channels");
-    lua_pushinteger(L, sndf->sf_info.channels);
-    lua_settable(L,-3);
-	lua_pushstring(L, "format");
-    lua_pushinteger(L, sndf->sf_info.format);
-    lua_settable(L,-3);
-	
-	return 1;
-}
- 
-
-int gettime_sndfile(lua_State *L)
-{
-	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
-	double time = sndf->gettime();//(double)sf_seek(sndf->sndfile, 0, SEEK_CUR)/(double)sndf->sf_info.samplerate;
-	lua_pushnumber(L, time);
-	return 1;
-}
-
-int play_sndfile(lua_State *L)
-{
-	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
-	if (lua_isnumber(L, 2))
-		sndf->level = lua_tonumber(L, 2); 
-	if (lua_isnumber(L, 3))
-		sndf->timeoffset = lua_tonumber(L, 3); 
-	playing_files.insert(sndf);
-	return 0;
-}
-
-int stop_sndfile(lua_State *L)
-{
-	soundFileSt *sndf = (soundFileSt *)luaL_checkudata(L, 1, LIBSNDFILE);
-	playing_files.erase(sndf);
-	return 0;
-}
-//TODO dont read after end of file
-bool playSoundFiles(double *outputBuffer,unsigned int nFrames,int channels, double streamTime, double windowsize)
-{
-	double BUFFER[nFrames*channels];
-	memset(BUFFER,0,nFrames*channels*sizeof(double));
-	for (std::set<soundFileSt*>::iterator it=playing_files.begin(); it!=playing_files.end(); ++it){
-		if ((*it)->sf_info.channels == channels){
-			if((*it)->timeoffset <= streamTime){ //already set
-				unsigned int read = sf_readf_double((*it)->sndfile,BUFFER,nFrames);
-				//if read < nFrames delete
-				//std::cout << (*it)->filename << std::endl;
-				for(int i=0; i< nFrames*channels; i++){
-					outputBuffer[i] += BUFFER[i]*(*it)->level;
-				}
-			}else{
-				if((*it)->timeoffset < streamTime + windowsize){ //set it if in window
-					int frames = (streamTime + windowsize - (*it)->timeoffset) * (*it)->sf_info.samplerate;
-					int res = sf_seek((*it)->sndfile, 0, SEEK_SET) ;
-					if (res == -1)
-						return false;
-					unsigned int read = sf_readf_double((*it)->sndfile,BUFFER,frames);
-					for(int i = (nFrames - frames)*channels,j=0; i< nFrames*channels; i++,j++){
-						outputBuffer[i] += BUFFER[j]*(*it)->level;
-					}
-				}
-			}
-		}
-	}
-	return true;
-}
-static const struct luaL_Reg funcs_libsndfile[] = {
-	{"stop", stop_sndfile },
-	{"play", play_sndfile },
-	{"close", close_sndfile },
-	{"info", info_sndfile },
-	{"seek", seek_sndfile},
-	{"gettime", gettime_sndfile},
-	{"__gc", destroy_sndfile },
-    {NULL, NULL}
-};
-static const NamedConst libsndfile_const[] = {
-    {"SEEK_SET",             SEEK_SET},
-    {"SEEK_CUR",             SEEK_CUR}, 
-    {"SEEK_END",             SEEK_END}, 
-    { 0, 0}
-};
-#endif
 
 int setStreamTime_lua(lua_State *L)
 {
-    RtAudio *dac = lua_userdata_cast(L,1,RtAudio);
+    DAC *dac = lua_userdata_cast(L,1,DAC);
     double time = (double)luaL_checknumber(L, 2);;
     try {
-        dac->setStreamTime(time);
+        dac->rtaudio->setStreamTime(time);
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
 	#if defined(USE_SNDFILE)
 	//set the soundfiles
-	for (std::set<soundFileSt*>::iterator it=playing_files.begin(); it!=playing_files.end(); ++it){
+	for (std::set<soundFileSt*>::iterator it=dac->playing_files.begin(); it!=dac->playing_files.end(); ++it){
 		if ((*it)->timeoffset <= time){
 			int frames = (time - (*it)->timeoffset) * (*it)->sf_info.samplerate;
 			int res = sf_seek((*it)->sndfile, frames, SEEK_SET) ;
@@ -802,6 +801,86 @@ int setStreamTime_lua(lua_State *L)
 	#endif
     return 0;
 }
+
+
+int RegisterLanesCallback(lua_State *L){
+	if(!lua_isfunction(L,-1))
+		luaL_error(L,"RegisterLanesCallback did not return a function\n");
+	int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	lua_pushlightuserdata (L, L);
+	lua_pushinteger(L, ref);
+	return 2;
+}
+
+int setCallbackLanes(lua_State *L){
+	//lua_gc(L, LUA_GCSTOP,0);
+	DAC *dac = lua_userdata_cast(L,1,DAC);
+	dac->thecallback_ref = luaL_checkinteger(L,3);
+	if(!lua_islightuserdata(L, 2)){
+		luaL_error(L,"second arg is not lightuserdata\n");
+		return 0;
+	}
+	dac->callback_state = (lua_State *)lua_touserdata(L, 2);
+	return 0;
+}
+
+int setCallbackLanesPost(lua_State *L){
+	DAC *dac = lua_userdata_cast(L,1,DAC);
+	dac->thecallback_post_ref = luaL_checkinteger(L,3);
+	if(!lua_islightuserdata(L, 2)){
+		luaL_error(L,"second arg is not lightuserdata\n");
+		return 0;
+	}
+	dac->callback_state_post = (lua_State *)lua_touserdata(L, 2);
+	return 0;
+}
+
+int setCallback(lua_State *L){
+	DAC *dac = lua_userdata_cast(L,1,DAC);
+    const char *chunk = luaL_checkstring(L, 2);
+    lua_State *L1 = luaL_newstate();
+    if (L1 == NULL)
+        luaL_error(L, "unable to create new state");
+
+    luaL_openlibs(L1); /* open standard libraries */
+	if (luaL_loadstring(L1, chunk) != 0)
+        luaL_error(L, "error loading chunk: %s",lua_tostring(L1, -1));
+    if (lua_pcall(L1, 0, 1, 0) != 0){ /* call main chunk must return a function callback*/
+        //fprintf(stderr, "thread error: %s", lua_tostring(L1, -1));
+		luaL_error(L,"chunk was run with error: %s\n", lua_tostring(L1, -1));
+		return 0;
+	}
+	if(!lua_isfunction(L1,-1))
+		luaL_error(L,"chunk did not return a function\n");
+	dac->thecallback_ref = luaL_ref(L1, LUA_REGISTRYINDEX);
+    dac->callback_state = L1;
+    return 0;
+}
+
+int setCallbackPost(lua_State *L){
+	DAC *dac = lua_userdata_cast(L,1,DAC);
+    const char *chunk = luaL_checkstring(L, 2);
+    lua_State *L1 = luaL_newstate();
+    if (L1 == NULL)
+        luaL_error(L, "unable to create new state");
+    if (luaL_loadstring(L1, chunk) != 0)
+        luaL_error(L, "error loading chunk: %s",lua_tostring(L1, -1));
+    luaL_openlibs(L1); /* open standard libraries */
+    if (lua_pcall(L1, 0, 1, 0) != 0) {/* call main chunk */
+        //fprintf(stderr, "thread error: %s", lua_tostring(L1, -1));
+		luaL_error(L,"chunk was run with error: %s\n", lua_tostring(L1, -1));
+		return 0;
+	}
+	if(!lua_isfunction(L1,-1)){
+		luaL_error(L,"chunk did not return a function\n");
+		return 0;
+	}
+	dac->thecallback_post_ref = luaL_ref(L1, LUA_REGISTRYINDEX);
+    dac->callback_state_post = L1;
+    return 0;
+}
+
+
 static const struct luaL_Reg funcs[] = {
     {"getDeviceCount", getDeviceCount_lua },
     {"getDeviceInfo", getDeviceInfo_lua },
@@ -820,6 +899,13 @@ static const struct luaL_Reg funcs[] = {
 	{"getStreamLatency",getStreamLatency_lua},
 	{"getStreamSampleRate",getStreamSampleRate_lua},
 	{"showWarnings",showWarnings_lua},
+	{"setCallback",setCallback},
+	{"setCallbackPost",setCallbackPost},
+    {"setCallbackLanes",setCallbackLanes},
+	{"setCallbackLanesPost",setCallbackLanesPost},
+#if defined(USE_SNDFILE)
+	{"record",record},
+#endif
 	{"__gc", Destroy },
     {NULL, NULL}
 };
@@ -827,11 +913,7 @@ static const struct luaL_Reg thislib[] = {
     {"RtAudio", lua_RtAudio },
     {"getCompiledApi", getCompiledApi_lua},
     {"getVersion", getVersion_lua},
-    {"setCallback",setCallback},
-	{"setCallbackPost",setCallbackPost},
-    {"setCallbackLanes",setCallbackLanes},
-	{"setCallbackLanesPost",setCallbackLanesPost},
-    {"getCallback",getCallback},
+	{"RegisterLanesCallback",RegisterLanesCallback},
 #if defined(USE_SNDFILE)
 	{"soundFile",soundFile},
 #endif
@@ -848,12 +930,12 @@ extern "C" LUALIB_API int luaopen_RtAudio_core (lua_State* L) {
     luaL_register(L, NULL, funcs_libsndfile);
 #endif
     //luaL_register(L, "RtAudio", funcs);
-    luaL_newmetatable(L, RTAUDIO);
+    luaL_newmetatable(L, "DAC");
     /* metatable.__index = metatable */
     lua_pushvalue(L, -1); /* duplicates the metatable */
     lua_setfield(L, -2, "__index");
     luaL_register(L, NULL, funcs);
-    luaL_register(L, "RtAudio", thislib);
+    luaL_register(L, "DAC", thislib);
     registerConstants(L, rtaudio_Const);
     registerConstants(L, rtaudio_formats);
 #if defined(USE_SNDFILE)

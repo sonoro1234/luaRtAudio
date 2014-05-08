@@ -54,10 +54,10 @@ local function lanegen(func_body,thread_name,post)
 		local rta = require"RtAudio"
 
 		callbackF = func_body(...)
-		rta.setCallbackLanesPost("callbackF")
+		local state,ref = rta.RegisterLanesCallback(callbackF)
 		--notify done and sleep forever
 		local block_linda = rta.lanes.linda()
-		_RtAudio_linda:send("done_cb_post",block_linda)
+		_RtAudio_linda:send(thread_name,{block_linda, state, ref})
 		block_linda:receive("unblock")
 	end
 	
@@ -67,11 +67,11 @@ local function lanegen(func_body,thread_name,post)
 		set_debug_threadname(thread_name)
 		local rta = require"RtAudio"
 
-		callbackF = func_body(...)
-		rta.setCallbackLanes("callbackF")
+		local callbackF = func_body(...)
+		local state,ref = rta.RegisterLanesCallback(callbackF)
 		--notify done and sleep forever
 		local block_linda = rta.lanes.linda()
-		_RtAudio_linda:send("done_cb",block_linda)
+		_RtAudio_linda:send(thread_name,{block_linda, state, ref}) 
 		block_linda:receive("unblock")
 	end
 	
@@ -82,26 +82,34 @@ local function lanegen(func_body,thread_name,post)
 	end
 end
 
-
-function M.setcb_lanes_post(cb,...)
-	assert(type(cb)=="function","arg must be a function")
-	lanegen(cb,"cb_lanes_post lane",true)(M.linda,...)
-	local key,val = M.linda:receive("done_cb_post") -- block until  callback is set
-	if M.block_linda_post then
-		--perhaps we should stop stream before?
-		M.block_linda_post:send("unblock",1)
+M.block_lindas = {}
+function M.RtAudio(api)
+	local dac = core.RtAudio(api)
+	local meta = getmetatable(dac)
+	function meta:setcb_lanes(cb,...)
+		assert(type(cb)=="function","arg must be a function")
+		local name = "cb_lanes "..tostring(dac)
+		lanegen(cb,name)(M.linda,...)
+		local key,val = M.linda:receive(name) -- block until  callback is set
+		if M.block_lindas[name] then
+			--perhaps we should stop stream before?
+			M.block_lindas[name]:send("unblock",1)
+		end
+		M.block_lindas[name] = val[1]
+		self:setCallbackLanes(val[2],val[3])
 	end
-	M.block_linda_post = val
-end
-
-function M.setcb_lanes(cb,...)
-	assert(type(cb)=="function","arg must be a function")
-	lanegen(cb,"cb_lanes lane")(M.linda,...)
-	local key,val = M.linda:receive("done_cb") -- block until  callback is set
-	if M.block_linda then
-		--perhaps we should stop stream before?
-		M.block_linda:send("unblock",1)
+	function meta:setcb_lanes_post(cb,...)
+		assert(type(cb)=="function","arg must be a function")
+		local name = "cb_post_lanes "..tostring(dac)
+		lanegen(cb,name,true)(M.linda,...)
+		local key,val = M.linda:receive(name) -- block until  callback is set
+		if M.block_lindas[name] then
+			--perhaps we should stop stream before?
+			M.block_lindas[name]:send("unblock",1)
+		end
+		M.block_lindas[name] = val[1]
+		self:setCallbackLanesPost(val[2],val[3])
 	end
-	M.block_linda = val
+	return dac
 end
 return M
