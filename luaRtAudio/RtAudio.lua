@@ -10,7 +10,7 @@ else
 	end
 end
 
-local core = lanes.require("RtAudio.core")
+local core = require("RtAudio.core")
 local M = {}
 setmetatable(M,{__index = core})
 
@@ -19,7 +19,6 @@ if lanes then
 	if not _RtAudio_linda then -- it is not included from secondary lane
 		M.linda = lanes.linda("RtAudio linda")
 	end
-end
 
 local function lanegen(func_body,thread_name,post)
 	thread_name = thread_name or "unamed thread"
@@ -112,4 +111,5 @@ function M.RtAudio(api)
 	end
 	return dac
 end
+end -- if(lanes)
 return M

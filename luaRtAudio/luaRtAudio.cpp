@@ -633,7 +633,6 @@ int openStream_lua(lua_State *L)
     unsigned int bufferFrames = luaL_checkint(L, 5);
 	
 	int use_luajit = 0;
-	printf("lua_gettop %d\n",nargs);
 	if(nargs > 5){
 		use_luajit = lua_toboolean(L, 6);
 	}
