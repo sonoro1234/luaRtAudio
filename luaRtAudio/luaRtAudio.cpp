@@ -389,7 +389,58 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
     return 0;
 }
 
+static int cbMixjit(void *outputBuffer, void *inputBuffer, unsigned int nFrames, double streamTime, RtAudioStreamStatus status, void *data){
 
+	if(status)
+		printf("RtAudio callback status %d\n",status);
+		
+	DAC *dac = (DAC *)data;
+	
+	if(inputBuffer && outputBuffer){ //duplex , must have the same channels
+		memcpy( outputBuffer, inputBuffer, nFrames * dac->outparams->nChannels * sizeof(double) );
+	}
+	
+	int channels = dac->outparams->nChannels; //*((int *)data);
+	double windowsize = nFrames / dac->sampleRate;
+	memset(outputBuffer,0,nFrames * channels * sizeof(double));
+	
+	if(outputBuffer){
+		if (dac->callback_state!=0){
+			lua_State *L = dac->callback_state;
+			lua_rawgeti(L, LUA_REGISTRYINDEX, dac->thecallback_ref);
+			lua_pushnumber(L, nFrames); /* push 1st argument */
+			lua_pushlightuserdata (L, outputBuffer);
+			if (lua_pcall(L, 2, 0, 0) != 0){
+				//printf("Error running callback function : %s\n",lua_tostring(L, -1));
+				luaL_error(L, "error running callback function: %s",lua_tostring(L, -1));
+				lua_pop(L,1);
+				return 1;
+			}
+		}
+#if defined(USE_SNDFILE)
+		if(!dac->playSoundFiles((double *)outputBuffer,nFrames,channels,streamTime,windowsize)){
+			printf("error on playSoundFiles");
+			return 1;
+		}
+#endif
+		if(dac->callback_state_post!=0){
+			lua_State *L = dac->callback_state_post;
+			lua_rawgeti(L, LUA_REGISTRYINDEX, dac->thecallback_post_ref);
+			lua_pushnumber(L, nFrames);
+			lua_pushlightuserdata (L, outputBuffer);
+			if (lua_pcall(L, 2, 0, 0) != 0){
+				//printf("error running function %s: %s\n",thecallback_name_post.c_str(),lua_tostring(L, -1));
+				luaL_error(L, "error running callback post function : %s",lua_tostring(L, -1));
+				lua_pop(L,1);
+				return 1;
+			}
+		}
+		if(dac->recordfile){
+			sf_writef_double(dac->recordfile, (double *)outputBuffer, nFrames);
+		}
+	}
+    return 0;
+}
 
 static const NamedConst rtaudio_Const[] = {
     {"RtAudio_UNSPECIFIED",             RtAudio::UNSPECIFIED},
@@ -573,12 +624,21 @@ RtAudio::StreamParameters* getParameters(lua_State *L,int n)
 
 int openStream_lua(lua_State *L)
 {
-    DAC *dac = lua_userdata_cast(L,1,DAC);
+    int nargs = lua_gettop(L);
+	DAC *dac = lua_userdata_cast(L,1,DAC);
     dac->outparams = getParameters(L, 2);
     dac->inparams = getParameters(L, 3);
     //RtAudioFormat format = luaL_checkint(L, 4);
     dac->sampleRate = luaL_checkint(L, 4);
     unsigned int bufferFrames = luaL_checkint(L, 5);
+	
+	int use_luajit = 0;
+	printf("lua_gettop %d\n",nargs);
+	if(nargs > 5){
+		use_luajit = lua_toboolean(L, 6);
+	}
+	RtAudioCallback cb = (use_luajit==1) ? cbMixjit : cbMix;
+	
     RtAudio::StreamOptions options;
     options.flags = RTAUDIO_HOG_DEVICE;
     options.flags |= RTAUDIO_SCHEDULE_REALTIME;
@@ -592,12 +652,12 @@ int openStream_lua(lua_State *L)
 	//check channels match in duplex mode
 	if(dac->outparams && dac->inparams)
 		if(dac->outparams->nChannels != dac->inparams->nChannels){
-			luaL_error(L, "out channels %d and input channels %d dont match\n",dac->outparams->nChannels, dac->inparams->nChannels);
+			luaL_error(L, "out channels %d and input channels %d dont match\n", dac->outparams->nChannels, dac->inparams->nChannels);
 			return 0;
 		}
 
     try {
-        dac->rtaudio->openStream(dac->outparams,dac->inparams,RTAUDIO_FLOAT64,dac->sampleRate,&bufferFrames,cbMix,(void *)dac,&options);
+        dac->rtaudio->openStream(dac->outparams,dac->inparams,RTAUDIO_FLOAT64,dac->sampleRate,&bufferFrames,cb,(void *)dac,&options);
     }catch ( RtAudioError& e ) {
         return luaL_error(L, e.what());
     }
