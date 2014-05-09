@@ -20,10 +20,10 @@ if (UNIX AND NOT APPLE)
 endif ()
 
 set(BUILD_TESTING OFF CACHE INTERNAL "dont build tests!")
-add_subdirectory(RtAudioORIG)
+add_subdirectory(rtaudioORIG)
 
 #now luaRtAudio
-get_directory_property(LINKLIBS DIRECTORY RtAudioORIG DEFINITION LINKLIBS)
+get_directory_property(LINKLIBS DIRECTORY rtaudioORIG DEFINITION LINKLIBS)
 add_definitions(-DLUA_BUILD_AS_DLL -DLUA_LIB)
 if(LIBSNDFILE_INCLUDE_DIR)
 	add_definitions(-DUSE_SNDFILE)
@@ -31,7 +31,7 @@ if(LIBSNDFILE_INCLUDE_DIR)
 	set(LINKSNDFILE ${LIBSNDFILE_LIB})
 endif()
 INCLUDE_DIRECTORIES(${LUA_INCLUDE_DIR})
-INCLUDE_DIRECTORIES(RtAudioORIG)
+INCLUDE_DIRECTORIES(rtaudioORIG)
 ADD_LIBRARY(luaRtAudio SHARED luaRtAudio/luaRtAudio.cpp)
 set_target_properties(luaRtAudio PROPERTIES PREFIX "" OUTPUT_NAME core)
 
