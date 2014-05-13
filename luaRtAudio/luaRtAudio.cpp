@@ -895,14 +895,16 @@ int setCallbackLanesPost(lua_State *L){
 }
 
 int setCallback(lua_State *L){
+	size_t len;
 	DAC *dac = lua_userdata_cast(L,1,DAC);
-    const char *chunk = luaL_checkstring(L, 2);
+    const char *chunk = luaL_checklstring(L, 2, &len);
     lua_State *L1 = luaL_newstate();
     if (L1 == NULL)
         luaL_error(L, "unable to create new state");
 
     luaL_openlibs(L1); /* open standard libraries */
-	if (luaL_loadstring(L1, chunk) != 0)
+	//if (luaL_loadstring(L1, chunk) != 0)
+	if (luaL_loadbuffer(L1, chunk, len, "setCallback chunk") != 0)
         luaL_error(L, "error loading chunk: %s",lua_tostring(L1, -1));
     if (lua_pcall(L1, 0, 1, 0) != 0){ /* call main chunk must return a function callback*/
         //fprintf(stderr, "thread error: %s", lua_tostring(L1, -1));
@@ -917,12 +919,13 @@ int setCallback(lua_State *L){
 }
 
 int setCallbackPost(lua_State *L){
+	size_t len;
 	DAC *dac = lua_userdata_cast(L,1,DAC);
-    const char *chunk = luaL_checkstring(L, 2);
+    const char *chunk = luaL_checklstring(L, 2, &len);
     lua_State *L1 = luaL_newstate();
     if (L1 == NULL)
         luaL_error(L, "unable to create new state");
-    if (luaL_loadstring(L1, chunk) != 0)
+    if (luaL_loadbuffer(L1, chunk, len, "setCallback chunk") != 0)
         luaL_error(L, "error loading chunk: %s",lua_tostring(L1, -1));
     luaL_openlibs(L1); /* open standard libraries */
     if (lua_pcall(L1, 0, 1, 0) != 0) {/* call main chunk */
