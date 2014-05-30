@@ -322,7 +322,8 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 			lua_State *L = dac->callback_state;
 			lua_rawgeti(L, LUA_REGISTRYINDEX, dac->thecallback_ref);
 			lua_pushnumber(L, nFrames); /* push 1st argument */
-			if (lua_pcall(L, 1, 1, 0) != 0){
+			lua_pushnumber(L, streamTime); /* push 2 argument */
+			if (lua_pcall(L, 2, 1, 0) != 0){
 				//printf("Error running callback function : %s\n",lua_tostring(L, -1));
 				luaL_error(L, "error running callback function: %s",lua_tostring(L, -1));
 				lua_pop(L,1);
@@ -359,7 +360,8 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 				lua_pushnumber(L,(double)*buffer++);
 				lua_rawseti(L, -2,i);
 			}
-			if (lua_pcall(L, 2, 1, 0) != 0){
+			lua_pushnumber(L, streamTime); /* push 2 argument */
+			if (lua_pcall(L, 3, 1, 0) != 0){
 				//printf("error running function %s: %s\n",thecallback_name_post.c_str(),lua_tostring(L, -1));
 				luaL_error(L, "error running callback post function : %s",lua_tostring(L, -1));
 				lua_pop(L,1);
@@ -410,7 +412,8 @@ static int cbMixjit(void *outputBuffer, void *inputBuffer, unsigned int nFrames,
 			lua_rawgeti(L, LUA_REGISTRYINDEX, dac->thecallback_ref);
 			lua_pushnumber(L, nFrames); /* push 1st argument */
 			lua_pushlightuserdata (L, outputBuffer);
-			if (lua_pcall(L, 2, 0, 0) != 0){
+			lua_pushnumber(L, streamTime); /* push 2 argument */
+			if (lua_pcall(L, 3, 0, 0) != 0){
 				//printf("Error running callback function : %s\n",lua_tostring(L, -1));
 				luaL_error(L, "error running callback function: %s",lua_tostring(L, -1));
 				lua_pop(L,1);
@@ -428,7 +431,8 @@ static int cbMixjit(void *outputBuffer, void *inputBuffer, unsigned int nFrames,
 			lua_rawgeti(L, LUA_REGISTRYINDEX, dac->thecallback_post_ref);
 			lua_pushnumber(L, nFrames);
 			lua_pushlightuserdata (L, outputBuffer);
-			if (lua_pcall(L, 2, 0, 0) != 0){
+			lua_pushnumber(L, streamTime); /* push 3 argument */
+			if (lua_pcall(L, 3, 0, 0) != 0){
 				//printf("error running function %s: %s\n",thecallback_name_post.c_str(),lua_tostring(L, -1));
 				luaL_error(L, "error running callback post function : %s",lua_tostring(L, -1));
 				lua_pop(L,1);
