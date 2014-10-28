@@ -6,4 +6,12 @@ There are still no docs but you can try lua samples to understand the api
 
 Remember to use git submodule update for getting RtAudioORIG folder (it is a submodule pointing to the original RtAudio github)
 
-Build directory has binaries from mingw and also init_cmake.bat and toolchain.cmake with CMake variables to be modified for building on any system
+To build you have two options:
+first option expecting cmake to find lua and sndfile:
+	1- cmake path_to_repository
+	2- make
+second option:
+	1- provide the paths nedded in build/toolchain.cmake
+	2- use init_cmake.bat (or adapt to linux and macosx)
+	3- make install
+	
