@@ -109,7 +109,7 @@ function M.RtAudio(api)
 		M.block_lindas[name] = val[1]
 		self:setCallbackLanesPost(val[2],val[3])
 	end
-	function meta:GetDeviceByName(name)
+	function meta:getDeviceByName(name)
 		for i=0,self:getDeviceCount()-1 do
 			if name == self:getDeviceInfo(i).name then
 				return i
