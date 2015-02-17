@@ -308,14 +308,13 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 		
 	DAC *dac = (DAC *)data;
 	
-	if(inputBuffer && outputBuffer){ //duplex , must have the same channels
-		memcpy( outputBuffer, inputBuffer, nFrames * dac->outparams->nChannels * sizeof(double) );
-	}
-	
-	
 	int channels = dac->outparams->nChannels; //*((int *)data);
 	double windowsize = nFrames / dac->sampleRate;
-	memset(outputBuffer,0,nFrames * channels * sizeof(double));
+	if(inputBuffer && outputBuffer){ //duplex , must have the same channels
+		memcpy( outputBuffer, inputBuffer, nFrames * channels * sizeof(double) );
+	}else{
+		memset(outputBuffer,0,nFrames * channels * sizeof(double));
+	}
 	
 	if(outputBuffer){
 		if (dac->callback_state!=0){
@@ -398,14 +397,14 @@ static int cbMixjit(void *outputBuffer, void *inputBuffer, unsigned int nFrames,
 		
 	DAC *dac = (DAC *)data;
 	
-	if(inputBuffer && outputBuffer){ //duplex , must have the same channels
-		memcpy( outputBuffer, inputBuffer, nFrames * dac->outparams->nChannels * sizeof(double) );
-	}
-	
 	int channels = dac->outparams->nChannels; //*((int *)data);
 	double windowsize = nFrames / dac->sampleRate;
-	memset(outputBuffer,0,nFrames * channels * sizeof(double));
-	
+	if(inputBuffer && outputBuffer){ //duplex , must have the same channels
+		memcpy( outputBuffer, inputBuffer, nFrames * channels * sizeof(double) );
+	}else{		
+		memset(outputBuffer,0,nFrames * channels * sizeof(double));
+	}
+		
 	if(outputBuffer){
 		if (dac->callback_state!=0){
 			lua_State *L = dac->callback_state;
