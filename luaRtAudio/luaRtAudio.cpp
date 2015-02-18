@@ -328,9 +328,15 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 				lua_pop(L,1);
 				return 1;
 			}
+			if(lua_isboolean(L, -1) && lua_toboolean(L, -1)==0){ //if false delete outputBuffer
+				memset(outputBuffer,0,nFrames * channels * sizeof(double));
+				lua_pop(L, 1);
+				return 1; //nothing to record
+			}
 			if(!lua_istable(L,-1)){
 				printf("error running callback function: did not returned table\n");
 				//luaL_error(L, "error running function 'thecallback': did not returned table");
+				lua_pop(L, 1);
 				return 1;
 			}
 			double *buffer = (double *) outputBuffer;
@@ -365,6 +371,11 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 				luaL_error(L, "error running callback post function : %s",lua_tostring(L, -1));
 				lua_pop(L,1);
 				return 1;
+			}
+			if(lua_isboolean(L, -1) && lua_toboolean(L, -1)==0){ //if false delete outputBuffer
+				memset(outputBuffer,0,nFrames * channels * sizeof(double));
+				lua_pop(L, 1);
+				return 1; //nothing to record
 			}
 			if(!lua_istable(L,-1)){
 				//printf("error running function %s: did not returned table\n",thecallback_name.c_str());
