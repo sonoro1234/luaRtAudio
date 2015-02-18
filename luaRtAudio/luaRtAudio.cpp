@@ -331,22 +331,22 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 			if(lua_isboolean(L, -1) && lua_toboolean(L, -1)==0){ //if false delete outputBuffer
 				memset(outputBuffer,0,nFrames * channels * sizeof(double));
 				lua_pop(L, 1);
-				return 1; //nothing to record
+			}else{
+				if(!lua_istable(L,-1)){
+					printf("error running callback function: did not returned table\n");
+					//luaL_error(L, "error running function 'thecallback': did not returned table");
+					lua_pop(L, 1);
+					return 1;
+				}
+				double *buffer = (double *) outputBuffer;
+				//interleaved is more simple
+				for (int i=1; i<=nFrames*channels; i++ ) {
+					lua_rawgeti(L, -1,i);
+					*buffer++ = (double)luaL_checknumber(L, -1);
+					lua_pop(L, 1);
+				}
+				lua_pop(L, 1); /* pop returned value */
 			}
-			if(!lua_istable(L,-1)){
-				printf("error running callback function: did not returned table\n");
-				//luaL_error(L, "error running function 'thecallback': did not returned table");
-				lua_pop(L, 1);
-				return 1;
-			}
-			double *buffer = (double *) outputBuffer;
-			//interleaved is more simple
-			for (int i=1; i<=nFrames*channels; i++ ) {
-				lua_rawgeti(L, -1,i);
-				*buffer++ = (double)luaL_checknumber(L, -1);
-				lua_pop(L, 1);
-			}
-			lua_pop(L, 1); /* pop returned value */
 		}
 #if defined(USE_SNDFILE)
 		if(!dac->playSoundFiles((double *)outputBuffer,nFrames,channels,streamTime,windowsize)){
@@ -375,7 +375,7 @@ static int cbMix(void *outputBuffer, void *inputBuffer, unsigned int nFrames, do
 			if(lua_isboolean(L, -1) && lua_toboolean(L, -1)==0){ //if false delete outputBuffer
 				memset(outputBuffer,0,nFrames * channels * sizeof(double));
 				lua_pop(L, 1);
-				return 1; //nothing to record
+				return 0; //nothing to record
 			}
 			if(!lua_istable(L,-1)){
 				//printf("error running function %s: did not returned table\n",thecallback_name.c_str());
