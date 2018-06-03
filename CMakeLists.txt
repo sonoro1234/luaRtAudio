@@ -20,7 +20,7 @@ if (UNIX AND NOT APPLE)
 endif ()
 
 set(BUILD_TESTING OFF CACHE INTERNAL "dont build tests!")
-add_subdirectory(rtaudioORIG)
+add_subdirectory(rtaudio EXCLUDE_FROM_ALL)
 
 #Lua
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake_modules/")
@@ -33,7 +33,7 @@ find_package(Sndfile)
 endif()
 
 #now luaRtAudio
-get_directory_property(LINKLIBS DIRECTORY rtaudioORIG DEFINITION LINKLIBS)
+get_directory_property(LINKLIBS DIRECTORY rtaudio DEFINITION LINKLIBS)
 add_definitions(-DLUA_BUILD_AS_DLL -DLUA_LIB)
 if(SNDFILE_INCLUDE_DIR)
 	add_definitions(-DUSE_SNDFILE)
@@ -41,7 +41,7 @@ if(SNDFILE_INCLUDE_DIR)
 	set(LINKSNDFILE ${SNDFILE_LIBRARY})
 endif()
 INCLUDE_DIRECTORIES(${LUA_INCLUDE_DIR})
-INCLUDE_DIRECTORIES(rtaudioORIG)
+INCLUDE_DIRECTORIES(rtaudio)
 ADD_LIBRARY(luaRtAudio SHARED luaRtAudio/luaRtAudio.cpp)
 set_target_properties(luaRtAudio PROPERTIES PREFIX "" OUTPUT_NAME core)
 
