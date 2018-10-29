@@ -4,7 +4,7 @@ It makes possible to play and record audio files but also to write sound generat
 
 There are still no docs but you can try lua samples to understand the api
 
-Remember to use git submodule update for getting RtAudioORIG folder (it is a submodule pointing to the original RtAudio github)
+Remember to use git submodule update for getting rtaudio folder (it is a submodule pointing to the original RtAudio github)
 
 To build you have two options:  
 first option expecting cmake to find lua and sndfile:  
