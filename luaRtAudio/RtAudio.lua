@@ -1,3 +1,4 @@
+if jit then require"ffi" end -- this is needed for helping lanes in LuaJIT detection
 local suceed,lanes = pcall(require,"lanes")
 
 if not suceed then
