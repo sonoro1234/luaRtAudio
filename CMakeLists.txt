@@ -1,6 +1,6 @@
 PROJECT(luaRtAudio)
-cmake_minimum_required(VERSION 2.8)
-
+cmake_minimum_required(VERSION 3.13)
+set(CMAKE_SHARED_LIBRARY_PREFIX "")
 #first take care of RtAudio CMake
 if (WIN32)
 	set(RTAUDIO_API_DS ON CACHE INTERNAL "use windows ds!")
@@ -20,7 +20,7 @@ if (UNIX AND NOT APPLE)
 endif ()
 
 set(BUILD_TESTING OFF CACHE INTERNAL "dont build tests!")
-add_subdirectory(rtaudio EXCLUDE_FROM_ALL)
+add_subdirectory(rtaudio)# EXCLUDE_FROM_ALL)
 
 #Lua
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake_modules/")
@@ -34,6 +34,9 @@ endif()
 
 #now luaRtAudio
 get_directory_property(LINKLIBS DIRECTORY rtaudio DEFINITION LINKLIBS)
+#get_directory_property(rtaudiomodule DIRECTORY rtaudio rtaudio)
+get_property(rtaudiomodule DIRECTORY rtaudio PROPERTY rtaudio)
+message(STATUS rtaudiomodule ${rtaudiomodule})
 add_definitions(-DLUA_BUILD_AS_DLL -DLUA_LIB)
 if(SNDFILE_INCLUDE_DIR)
 	add_definitions(-DUSE_SNDFILE)
@@ -45,10 +48,18 @@ INCLUDE_DIRECTORIES(rtaudio)
 ADD_LIBRARY(luaRtAudio SHARED luaRtAudio/luaRtAudio.cpp)
 set_target_properties(luaRtAudio PROPERTIES PREFIX "" OUTPUT_NAME core)
 
-TARGET_LINK_LIBRARIES(luaRtAudio ${LUA_LIBRARIES} rtaudio_static ${LINKLIBS} ${LINKSNDFILE})
+#TARGET_LINK_LIBRARIES(luaRtAudio ${LUA_LIBRARIES} rtaudio_static ${LINKLIBS} ${LINKSNDFILE})
+TARGET_LINK_LIBRARIES(luaRtAudio ${LUA_LIBRARIES} rtaudio ${LINKLIBS} ${LINKSNDFILE})
 
 if(INSTALL_CMOD)
 install(TARGETS luaRtAudio DESTINATION ${INSTALL_CMOD}/RtAudio)
 INSTALL(FILES luaRtAudio/RtAudio.lua DESTINATION ${INSTALL_LMOD})
-#INSTALL (FILES ${LINKSNDFILE} DESTINATION ${INSTALL_CMOD})
+install(TARGETS rtaudio 
+               RUNTIME DESTINATION  ${INSTALL_CMOD}
+               LIBRARY DESTINATION  ${INSTALL_CMOD}
+              # ARCHIVE DESTINATION ${INSTALL_CMOD}/lib 
+			  #PUBLIC_HEADER DESTINATION ${INSTALL_CMOD}/lib
+               )
+
+INSTALL (FILES ${LINKSNDFILE} DESTINATION ${INSTALL_CMOD})
 endif()
